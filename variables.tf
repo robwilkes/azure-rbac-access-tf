@@ -59,9 +59,11 @@ variable "custom_roles" {
 
 variable "access_groups" {
   type = list(object({
-    azure_role  = optional(string)           # display name of an Azure RBAC role; needs scope
-    entra_roles = optional(list(string), []) # display names of Microsoft Entra ID (directory) roles; tenant-wide
-    name_suffix = optional(string)           # explicit slug for the derived name, e.g. "microsoft365admin"; only when azure_role is null
+    azure_role   = optional(string)           # display name of an Azure RBAC role; needs scope
+    entra_roles  = optional(list(string), []) # display names of Microsoft Entra ID (directory) roles; tenant-wide
+    name_suffix  = optional(string)           # explicit slug for the derived name, e.g. "microsoft365admin"; entra_roles entries only
+    service      = optional(string)           # naming token for a role assigned inside another service (e.g. "intune"); no scope
+    service_role = optional(string)           # role slug inside that service (e.g. "helpdeskoperator"); group is named rbac-<service>-<service_role>; this module never assigns that role
     scope = optional(object({
       management_group = optional(string)
       subscription     = optional(string) # key in var.subscriptions
@@ -79,26 +81,37 @@ variable "access_groups" {
       active_membership_expire_after     = optional(string)
     })) # unset fields inherit var.access_group_defaults
   }))
-  description = "One entry per access group and the function groups that get it: either one Azure RBAC role at one scope (azure_role + scope), or Microsoft Entra ID roles tenant-wide (entra_roles + name_suffix). Group names are derived; PIM settings come from this entry's pim block, falling back to var.access_group_defaults field by field."
+  description = "One entry per access group and the function groups that get it: one Azure RBAC role at one scope (azure_role + scope), Microsoft Entra ID roles tenant-wide (entra_roles + name_suffix), or a role assigned inside another service (service + service_role) - the group and its PIM setup are created here, the service-side role binding is done by that service's admins. Group names are derived; PIM settings come from this entry's pim block, falling back to var.access_group_defaults field by field."
 
   validation {
-    condition     = alltrue([for g in var.access_groups : (g.azure_role != null) != (length(g.entra_roles) > 0)])
-    error_message = "Each access group sets exactly one of azure_role (with a scope) or entra_roles (tenant-wide), not both and not neither."
+    condition     = alltrue([for g in var.access_groups : (g.azure_role != null ? 1 : 0) + (length(g.entra_roles) > 0 ? 1 : 0) + (g.service != null ? 1 : 0) == 1])
+    error_message = "Each access group sets exactly one of azure_role (with a scope), entra_roles (tenant-wide), or service + service_role (service-managed role), not several and not none."
   }
 
   validation {
-    condition     = alltrue([for g in var.access_groups : g.azure_role != null || g.name_suffix != null])
+    condition = alltrue([
+      for g in var.access_groups : g.service == null || (
+        g.service_role != null
+        && can(regex("^[a-z0-9]+(-[a-z0-9]+)*$", g.service))
+        && can(regex("^[a-z0-9]+(-[a-z0-9]+)*$", g.service_role))
+      )
+    ])
+    error_message = "Service entries set both service and service_role, each lowercase letters, digits and single hyphens (e.g. service = \"intune\", service_role = \"helpdeskoperator\")."
+  }
+
+  validation {
+    condition     = alltrue([for g in var.access_groups : g.azure_role != null || g.service != null || g.name_suffix != null])
     error_message = "Entra-only access groups need name_suffix, e.g. name_suffix = \"microsoft365admin\"; the group is named rbac-entra-<name_suffix>."
   }
 
   validation {
-    condition     = alltrue([for g in var.access_groups : g.azure_role == null || g.name_suffix == null])
-    error_message = "name_suffix is only used when azure_role is null; Azure RBAC group names are derived from the role code."
+    condition     = alltrue([for g in var.access_groups : g.name_suffix == null || (g.azure_role == null && g.service == null)])
+    error_message = "name_suffix is only used by entra_roles entries; Azure RBAC names are derived from the role code, service names from service + service_role."
   }
 
   validation {
     condition     = alltrue([for g in var.access_groups : (g.azure_role != null) == (g.scope != null)])
-    error_message = "azure_role entries need a scope (management_group or subscription); entra_roles are tenant-wide and take no scope."
+    error_message = "azure_role entries need a scope (management_group or subscription); entra_roles and service entries take no scope."
   }
 
   validation {

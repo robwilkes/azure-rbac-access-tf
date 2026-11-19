@@ -1,19 +1,20 @@
 # terraform-azurerm-rbac-access
 
-This module implements the Azure RBAC access standard: cloud-only `rbac-` access groups, each holding either one Azure RBAC role at one scope or Microsoft Entra ID roles tenant-wide, with AD-synced `fn-` function groups as members (eligible through PIM for Groups, or active when PIM is switched off for a group).
+This module implements the Azure RBAC access standard: cloud-only `rbac-` access groups, each holding one Azure RBAC role at one scope, Microsoft Entra ID roles tenant-wide, or a role assigned inside another service (Intune and similar), with AD-synced `fn-` function groups as members (eligible through PIM for Groups, or active when PIM is switched off for a group).
 
 It creates:
 
 - A cloud-only security group (`rbac-*`) per access entry, named after what it grants.
 - Azure RBAC role assignments at management group, subscription, or resource group scope.
 - Tenant-wide Microsoft Entra ID (directory) role assignments for Entra-only access groups.
+- Service-role access groups (`rbac-<service>-<service_role>`, e.g. `rbac-intune-helpdeskoperator`): the group, its PIM policy and eligibility schedules are created here; the role itself is bound to the group inside that service, by that service's admins.
 - PIM for Groups activation policies (duration, MFA, justification, approval) on access groups with PIM enabled.
 - Permanent eligibility schedules linking the `fn-` function groups into PIM-enabled access groups, or active `azuread_group_member` links when PIM is off.
 - Plan-time standard checks that stop the plan on configuration that breaks the naming, scoping, or PIM rules.
 
 ## What this module is for
 
-Use this module to grant human access to Azure and Entra ID through the standard pattern: users are never added to role assignments or cloud groups directly. Access flows `user → fn- function group (AD-synced) → rbac- access group (cloud-only) → role at a scope`, with PIM for Groups gating activation. Each `access_groups` entry grants either one Azure RBAC role at one scope, or a set of Microsoft Entra ID roles tenant-wide.
+Use this module to grant human access to Azure and Entra ID through the standard pattern: users are never added to role assignments or cloud groups directly. Access flows `user → fn- function group (AD-synced) → rbac- access group (cloud-only) → role at a scope`, with PIM for Groups gating activation. Each `access_groups` entry grants one of three things: an Azure RBAC role at one scope, a set of Microsoft Entra ID roles tenant-wide, or a role the owning service assigns to the group outside Terraform — e.g. Intune's built-in *Helpdesk Operator*, bound by Intune admins to `rbac-intune-helpdeskoperator`, instead of handing out tenant-wide Intune Administrator in Entra.
 
 ## Prerequisites
 
@@ -82,7 +83,17 @@ or Microsoft Entra ID (directory) roles, which are tenant-wide and take no scope
 }
 ```
 
-Azure RBAC group names are derived from the role code (`rbac-mg-landingzones-vmcontributor`); scope is `management_group`, `subscription`, or `subscription` + `resource_group`. Entra-only groups need an explicit `name_suffix` instead, and one activation of such a group grants every listed role at once. Every PIM setting is explicit: set it on the entry's `pim` block, or leave it to `access_group_defaults` — nothing is inferred from the role name.
+or a role that lives inside another service (Intune and similar). The module creates the PIM-able group; the service's own admins bind the role to it:
+
+```hcl
+{
+  service      = "intune"            # the group is named rbac-intune-helpdeskoperator
+  service_role = "helpdeskoperator" # the role the Intune admin will bind to this group, inside Intune
+  members      = ["fn-helpdesk"]
+}
+```
+
+Azure RBAC group names are derived from the role code (`rbac-mg-landingzones-vmcontributor`); scope is `management_group`, `subscription`, or `subscription` + `resource_group`. Entra-only groups need an explicit `name_suffix` instead, and one activation of such a group grants every listed role at once. Service entries take no scope and no `name_suffix`: the name is `rbac-<service>-<service_role>`, and this module never touches the service-side role binding — hand the group's object ID (from the `access_groups` output) to the service's admins, who assign `service_role` to it there. Every PIM setting is explicit: set it on the entry's `pim` block, or leave it to `access_group_defaults` — nothing is inferred from the role name.
 
 ## Key inputs
 
@@ -92,7 +103,7 @@ Azure RBAC group names are derived from the role code (`rbac-mg-landingzones-vmc
 | subscriptions         | Subscription CAF name => subscription ID, used to build scopes and group names.    |
 | access_group_owners   | Object IDs of the principals that own every access group.                          |
 | access_group_defaults | Baseline PIM settings; a group's own `pim` block overrides field by field.         |
-| access_groups         | One entry per access group: role or Entra roles, scope, members, PIM overrides.    |
+| access_groups         | One entry per access group: Azure role + scope, Entra roles, or `service` + `service_role`; members, PIM overrides. |
 | custom_roles          | Custom role name => `{ code, id }` for roles outside the built-in role code list.  |
 
 ## PIM settings
@@ -136,11 +147,14 @@ Examples:
   members     = ["fn-microsoft365-admins"]
   pim         = { require_approval = true, approver_group = "fn-approvers", entra_role_assignable = true }
 }
+
+# Intune Helpdesk Operator: PIM wiring here; the role binding is made in Intune
+{ service = "intune", service_role = "helpdeskoperator", members = ["fn-helpdesk"] }
 ```
 
 ## Outputs
 
-- access_groups — the access groups managed here and what each one grants (object ID, role(s), scope, members, resolved PIM settings). Useful for access reviews, audit reporting, and handing group object IDs to other teams.
+- access_groups — the access groups managed here and what each one grants (object ID, role(s) or service binding, scope, members, resolved PIM settings). Useful for access reviews, audit reporting, and handing group object IDs to other teams (including the service admins who bind service roles to `rbac-<service>-*` groups).
 
 ## Deployment permissions
 
@@ -149,14 +163,16 @@ Deploying this module requires the appropriate Azure RBAC and Microsoft Entra pe
 - Microsoft Graph application permissions: `Group.ReadWrite.All`, `RoleManagement.ReadWrite.Directory` (for role-assignable groups and Entra ID role assignment), `RoleManagementPolicy.ReadWrite.AzureADGroup`, `PrivilegedEligibilitySchedule.ReadWrite.AzureADGroup`
 - The identity must be Privileged Role Administrator (or Global Administrator) to create and manage role-assignable groups.
 - Azure: Role Based Access Control Administrator, conditioned to group principals, at the top management group the scopes sit under.
+- Service-role groups need no extra permissions: only the group and its PIM wiring are created here. Binding the role inside the service (e.g. Intune's Helpdesk Operator) is done with that service admin's own permissions.
 
 ## Plan-time validation
 
 The plan fails on:
 
-- Setting both `azure_role` and `entra_roles`, or neither
-- An Entra-only group without `name_suffix`, or a `name_suffix` on an Azure RBAC group
-- A scope mismatch: `azure_role` without a scope, or `entra_roles` with one
+- Setting more than one of `azure_role`, `entra_roles`, `service`, or none of them
+- `service` without `service_role`, or a `service`/`service_role` that isn't a lowercase slug (letters, digits, single hyphens)
+- An Entra-only group without `name_suffix`, or a `name_suffix` on an Azure RBAC or service group
+- A scope mismatch: `azure_role` without a scope, or `entra_roles`/`service` with one
 - Entra ID roles on a group whose resolved settings don't have `entra_role_assignable = true`
 - An Azure RBAC role with no role code (add it to `naming.tf` or `custom_roles`)
 - An invalid `maximum_duration` (ISO 8601 like `PT4H`/`P1D`) when PIM is enabled
@@ -170,7 +186,8 @@ The plan fails on:
 
 ## Implementation notes
 
-- A change to an entry's role or scope changes the group name, so Terraform replaces the group. This is intended, because the name describes what the group grants.
+- A change to an entry's role, service pair (`service` + `service_role`) or scope changes the group name, so Terraform replaces the group. This is intended, because the name describes what the group grants.
+- A service entry with `pim = { enabled = false }` gets plain active membership like any other group — legal, but the usual intent for service roles is PIM.
 - Flipping `entra_role_assignable` recreates the group, because it can't be changed in place.
 - One state per landing zone (plus one for platform-wide groups) keeps changes contained. The code is the same in each; only the tfvars differ.
 - Not included: alerting on direct user assignments, access reviews, break-glass accounts.
@@ -190,4 +207,4 @@ The plan fails on:
 | `members.tf`      | Active membership for groups with PIM switched off                    |
 | `variables.tf`    | Inputs and input validation                                           |
 | `outputs.tf`      | `access_groups` output                                                |
-| `examples/basic/` | Complete root module example (service desk and payroll)               |
+| `examples/basic/` | Complete root module example (service desk, payroll, Entra and Intune)            |

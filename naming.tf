@@ -33,15 +33,16 @@ locals {
 
   # Pass 2: name parts and scope ID. coalesce() keeps the unused map entries null-safe;
   # the outer ternary skips them entirely for tenant-scoped groups, where g.scope is null.
+  # Service entries use the service name as the naming token and carry no scope ID.
   _resolved = [
     for g in local._scoped : merge(g, {
       role_code = g.azure_role != null ? lookup(local.role_codes, g.azure_role, "unknown-role") : null
 
-      scope_token = g.scope == null ? "entra" : {
+      scope_token = g.service != null ? g.service : (g.scope == null ? "entra" : {
         mg  = "mg-${coalesce(g.scope.management_group, "-")}"
         sub = coalesce(g.scope.subscription, "-")
         rg  = coalesce(g.scope.resource_group, "-")
-      }[g.scope_kind]
+      }[g.scope_kind])
 
       scope_id = g.scope == null ? null : {
         mg  = "/providers/Microsoft.Management/managementGroups/${coalesce(g.scope.management_group, "-")}"
@@ -51,8 +52,10 @@ locals {
     })
   ]
 
-  # Final map, keyed by the derived group name. Two entries that resolve to the
-  # same name (same role, same scope) fail the plan with a duplicate key error.
+  # Final map, keyed by the derived group name: rbac-<scope token>-<name part>,
+  # the name part being the service slug, the Azure role code, or the Entra
+  # name_suffix. Two entries that resolve to the same name (same role, same
+  # scope) fail the plan with a duplicate key error.
   # PIM settings are resolved field by field: the group's own pim block wins,
   # unset fields inherit var.access_group_defaults. Nothing is inferred from the role.
   # g.pim is null (not an error) when absent, and its unset optional fields are
@@ -60,7 +63,7 @@ locals {
   # expression over the object would not work here: it unifies all value types
   # to string, turning booleans into "true"/"false".
   access_groups = {
-    for g in local._resolved : (g.role_code != null ? "rbac-${g.scope_token}-${g.role_code}" : "rbac-${g.scope_token}-${g.name_suffix}") => merge(g, {
+    for g in local._resolved : "rbac-${g.scope_token}-${g.service != null ? g.service_role : (g.role_code != null ? g.role_code : g.name_suffix)}" => merge(g, {
       pim = {
         enabled                            = g.pim != null && g.pim.enabled != null ? g.pim.enabled : var.access_group_defaults.enabled
         maximum_duration                   = g.pim != null && g.pim.maximum_duration != null ? g.pim.maximum_duration : var.access_group_defaults.maximum_duration

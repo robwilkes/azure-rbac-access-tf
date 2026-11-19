@@ -96,6 +96,14 @@ module "rbac_access" {
       members     = ["fn-microsoft365-admins"]
       pim         = { require_approval = true, approver_group = "fn-approvers", entra_role_assignable = true }
     },
+
+    # Intune Helpdesk Operator: the group and its PIM eligibility are managed here;
+    # the Intune admin binds the built-in role to this group in the Intune portal.
+    {
+      service      = "intune"
+      service_role = "helpdeskoperator"
+      members      = ["fn-helpdesk"]
+    },
   ]
 }
 
