@@ -22,6 +22,8 @@ locals {
     "Key Vault Administrator"                 = "kvadmin"
     "Key Vault Secrets User"                  = "kvsecretsuser"
     "Monitoring Reader"                       = "monreader"
+    "Reader and Data Access"                  = "readerdataaccess"
+    "Network-Management (alz)"                = "netmgmtalz"
   }
 
   role_codes = merge(local.builtin_role_codes, { for name, r in var.custom_roles : name => r.code })
