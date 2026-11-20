@@ -52,18 +52,14 @@ locals {
     })
   ]
 
-  # Final map, keyed by the derived group name: rbac-<scope token>-<name part>,
-  # the name part being the service slug, the Azure role code, or the Entra
-  # name_suffix. Two entries that resolve to the same name (same role, same
-  # scope) fail the plan with a duplicate key error.
-  # PIM settings are resolved field by field: the group's own pim block wins,
-  # unset fields inherit var.access_group_defaults. Nothing is inferred from the role.
-  # g.pim is null (not an error) when absent, and its unset optional fields are
-  # null, so each field checks both before falling back to the default. A for
-  # expression over the object would not work here: it unifies all value types
-  # to string, turning booleans into "true"/"false".
-  access_groups = {
-    for g in local._resolved : "rbac-${g.scope_token}-${g.service != null ? g.service_role : (g.role_code != null ? g.role_code : g.name_suffix)}" => merge(g, {
+  # Pass 3: PIM settings resolved field by field (the group's own pim block wins,
+  # unset fields inherit var.access_group_defaults; nothing is inferred from the
+  # role), plus the custom role ID. g.pim is null (not an error) when absent, and
+  # its unset optional fields are null, so each field checks both before falling
+  # back to the default. A for expression over the object would not work here: it
+  # unifies all value types to string, turning booleans into "true"/"false".
+  _pimmed = [
+    for g in local._resolved : merge(g, {
       pim = {
         enabled                            = g.pim != null && g.pim.enabled != null ? g.pim.enabled : var.access_group_defaults.enabled
         maximum_duration                   = g.pim != null && g.pim.maximum_duration != null ? g.pim.maximum_duration : var.access_group_defaults.maximum_duration
@@ -76,6 +72,18 @@ locals {
       }
       custom_role_id = g.azure_role != null ? try(var.custom_roles[g.azure_role].id, null) : null
     })
+  ]
+
+  # Final map, keyed by the derived group name: rbac-<scope token>-<name part>,
+  # the name part being the service slug, the Azure role code, or the Entra
+  # name_suffix, and a trailing -approval segment when activation requires
+  # approval (the PIM policy is per group, so groups that differ only in
+  # approval must be named differently). Reserved: the name part itself never
+  # is or ends in approval (validated in variables.tf). Two entries that
+  # resolve to the same name (same role, same scope, same approval
+  # requirement) fail the plan with a duplicate key error.
+  access_groups = {
+    for g in local._pimmed : "rbac-${g.scope_token}-${g.service != null ? g.service_role : (g.role_code != null ? g.role_code : g.name_suffix)}${g.pim.enabled && g.pim.require_approval ? "-approval" : ""}" => g
   }
 
   # Groups with a PIM policy (eligible membership).

@@ -51,6 +51,11 @@ variable "custom_roles" {
     condition     = alltrue([for r in values(var.custom_roles) : startswith(r.code, "cr-")])
     error_message = "Custom role codes must start with cr-."
   }
+
+  validation {
+    condition     = alltrue([for r in values(var.custom_roles) : !can(regex("(^|-)approval$", r.code))])
+    error_message = "Custom role codes must not be or end in approval; the -approval name segment is reserved for approval-gated access groups."
+  }
 }
 
 #------------------------------------------------------------------------------
@@ -81,7 +86,7 @@ variable "access_groups" {
       active_membership_expire_after     = optional(string)
     })) # unset fields inherit var.access_group_defaults
   }))
-  description = "One entry per access group and the function groups that get it: one Azure RBAC role at one scope (azure_role + scope), Microsoft Entra ID roles tenant-wide (entra_roles + name_suffix), or a role assigned inside another service (service + service_role) - the group and its PIM setup are created here, the service-side role binding is done by that service's admins. Group names are derived; PIM settings come from this entry's pim block, falling back to var.access_group_defaults field by field."
+  description = "One entry per access group and the function groups that get it: one Azure RBAC role at one scope (azure_role + scope), Microsoft Entra ID roles tenant-wide (entra_roles + name_suffix), or a role assigned inside another service (service + service_role) - the group and its PIM setup are created here, the service-side role binding is done by that service's admins. Group names are derived, gaining a trailing -approval when activation requires approval; PIM settings come from this entry's pim block, falling back to var.access_group_defaults field by field."
 
   validation {
     condition     = alltrue([for g in var.access_groups : (g.azure_role != null ? 1 : 0) + (length(g.entra_roles) > 0 ? 1 : 0) + (g.service != null ? 1 : 0) == 1])
@@ -107,6 +112,16 @@ variable "access_groups" {
   validation {
     condition     = alltrue([for g in var.access_groups : g.name_suffix == null || (g.azure_role == null && g.service == null)])
     error_message = "name_suffix is only used by entra_roles entries; Azure RBAC names are derived from the role code, service names from service + service_role."
+  }
+
+  validation {
+    condition = alltrue([
+      for g in var.access_groups : (
+        (g.name_suffix == null || !can(regex("(^|-)approval$", g.name_suffix)))
+        && (g.service_role == null || !can(regex("(^|-)approval$", g.service_role)))
+      )
+    ])
+    error_message = "name_suffix and service_role must not be or end in approval: the -approval name segment is reserved for groups whose activation requires approval."
   }
 
   validation {

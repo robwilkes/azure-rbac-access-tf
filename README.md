@@ -4,7 +4,7 @@ This module implements the Azure RBAC access standard: cloud-only `rbac-` access
 
 It creates:
 
-- A cloud-only security group (`rbac-*`) per access entry, named after what it grants.
+- A cloud-only security group (`rbac-*`) per access entry, named after what it grants, with an `-approval` segment in the name when activation requires approval.
 - Azure RBAC role assignments at management group, subscription, or resource group scope.
 - Tenant-wide Microsoft Entra ID (directory) role assignments for Entra-only access groups.
 - Service-role access groups (`rbac-<service>-<service_role>`, e.g. `rbac-intune-helpdeskoperator`): the group, its PIM policy and eligibility schedules are created here; the role itself is bound to the group inside that service, by that service's admins.
@@ -93,7 +93,29 @@ or a role that lives inside another service (Intune and similar). The module cre
 }
 ```
 
-Azure RBAC group names are derived from the role code (`rbac-mg-landingzones-vmcontributor`); scope is `management_group`, `subscription`, or `subscription` + `resource_group`. Entra-only groups need an explicit `name_suffix` instead, and one activation of such a group grants every listed role at once. Service entries take no scope and no `name_suffix`: the name is `rbac-<service>-<service_role>`, and this module never touches the service-side role binding — hand the group's object ID (from the `access_groups` output) to the service's admins, who assign `service_role` to it there. Every PIM setting is explicit: set it on the entry's `pim` block, or leave it to `access_group_defaults` — nothing is inferred from the role name.
+Azure RBAC group names are derived from the role code (`rbac-mg-landingzones-vmcontributor`); scope is `management_group`, `subscription`, or `subscription` + `resource_group`. Entra-only groups need an explicit `name_suffix` instead, and one activation of such a group grants every listed role at once. Service entries take no scope and no `name_suffix`: the name is `rbac-<service>-<service_role>`, and this module never touches the service-side role binding — hand the group's object ID (from the `access_groups` output) to the service's admins, who assign `service_role` to it there. Names also state the approval requirement: when the resolved PIM settings require approval, the name gains a trailing `-approval` segment (`rbac-sub-payroll-prod-owner-approval`), because the PIM policy — approval included — belongs to the group. Every PIM setting is explicit: set it on the entry's `pim` block, or leave it to `access_group_defaults` — nothing is inferred from the role name.
+
+### Different approval requirements need different groups
+
+The activation policy (approval, duration, justification) is a property of the access group, not of each member link — one access group cannot be approval-free for one function group and approval-gated for another. Write two entries for the same role and scope; the name flag keeps them apart:
+
+```hcl
+{
+  entra_roles = ["Security Administrator"]
+  name_suffix = "securityadmin"
+  members     = ["fn-platform-leads"] # eligible without approval
+  pim         = { entra_role_assignable = true } # -> rbac-entra-securityadmin
+}
+
+{
+  entra_roles = ["Security Administrator"]
+  name_suffix = "securityadmin"
+  members     = ["fn-security-admins"] # eligible only with approval
+  pim         = { require_approval = true, entra_role_assignable = true } # -> rbac-entra-securityadmin-approval
+}
+```
+
+With identical policy, put both function groups in the same entry's `members` instead — one group, one policy. The `-approval` segment is reserved: `name_suffix`, `service_role` and custom role codes must not be or end in `approval`.
 
 ## Key inputs
 
@@ -116,7 +138,7 @@ Each setting maps 1:1 to an Entra attribute. A group's `pim` block overrides `ac
 | `maximum_duration`               | `"PT8H"`  | `activation_rules.maximum_duration`, ISO 8601 (e.g. `"PT4H"`)                                                                                                      |
 | `require_justification`          | `true`    | `activation_rules.require_justification`                                                                                                                           |
 | `require_multifactor_authentication` | `true` | `activation_rules.require_multifactor_authentication`                                                                                                              |
-| `require_approval`               | `false`   | `activation_rules.require_approval`; needs an `approver_group`                                                                                                     |
+| `require_approval`               | `false`   | `activation_rules.require_approval`; needs an `approver_group`; when true (with PIM on) the group name gains the `-approval` segment                                     |
 | `approver_group`                 | `null`    | display name of the group whose members approve (`approval_stage.primary_approver`)                                                                                |
 | `entra_role_assignable`          | `false`   | `azuread_group.assignable_to_role`: lets this group hold **Microsoft Entra ID (directory) roles** — Azure RBAC roles work on any security group. Immutable, max 500 per tenant; changing it recreates the group |
 | `active_membership_expire_after` | `"P15D"`  | `active_assignment_rules.expire_after`, caps hand-added active membership; `null` = no cap                                                                         |
@@ -179,7 +201,8 @@ The plan fails on:
 - `require_approval = true` without an `approver_group` (on the group or in `access_group_defaults`)
 - A subscription missing from `var.subscriptions`
 - Members that aren't `fn-` groups
-- Two entries that resolve to the same group name (same role and scope)
+- Two entries that resolve to the same group name (same role, scope and approval requirement)
+- A `name_suffix`, `service_role` or custom role code that is or ends in `approval` (that name segment is reserved)
 - Names over 64 characters or not lowercase
 
 `naming.tf`, `standard.tf` and `variables.tf` need no Azure access, so they can be checked in CI.
@@ -187,6 +210,8 @@ The plan fails on:
 ## Implementation notes
 
 - A change to an entry's role, service pair (`service` + `service_role`) or scope changes the group name, so Terraform replaces the group. This is intended, because the name describes what the group grants.
+- Flipping a group's resolved `require_approval` (or `enabled`) moves the `-approval` segment in or out of the name, so the group is replaced; the name states the governance that applies.
+- One approval-gated group per role and scope: two entries that differ only in `approver_group` resolve to the same name and fail the plan.
 - A service entry with `pim = { enabled = false }` gets plain active membership like any other group — legal, but the usual intent for service roles is PIM.
 - Flipping `entra_role_assignable` recreates the group, because it can't be changed in place.
 - One state per landing zone (plus one for platform-wide groups) keeps changes contained. The code is the same in each; only the tfvars differ.

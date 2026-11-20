@@ -89,12 +89,29 @@ module "rbac_access" {
     },
 
     # Microsoft 365 administration: Entra ID (directory) roles are tenant-wide, so no scope.
-    # One activation of the access group grants every listed role at once.
+    # One activation of the access group grants every listed role at once. Approval is
+    # required, so the group is named rbac-entra-microsoft365admin-approval.
     {
       entra_roles = ["Teams Administrator", "License Administrator", "Exchange Administrator"]
       name_suffix = "microsoft365admin"
       members     = ["fn-microsoft365-admins"]
       pim         = { require_approval = true, approver_group = "fn-approvers", entra_role_assignable = true }
+    },
+
+    # Security Administrator: the PIM policy lives on the group, so fn-groups with
+    # different approval requirements cannot share one access group. Same role, two
+    # groups; the name carries the -approval flag.
+    {
+      entra_roles = ["Security Administrator"]
+      name_suffix = "securityadmin"
+      members     = ["fn-platform-leads"]
+      pim         = { entra_role_assignable = true } # rbac-entra-securityadmin
+    },
+    {
+      entra_roles = ["Security Administrator"]
+      name_suffix = "securityadmin"
+      members     = ["fn-security-admins"]
+      pim         = { require_approval = true, entra_role_assignable = true } # rbac-entra-securityadmin-approval, approvers inherited from defaults
     },
 
     # Intune Helpdesk Operator: the group and its PIM eligibility are managed here;
