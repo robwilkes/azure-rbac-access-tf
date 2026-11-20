@@ -5,7 +5,7 @@ This module implements the Azure RBAC access standard: cloud-only `rbac-` access
 It creates:
 
 - A cloud-only security group (`rbac-*`) per access entry, named after what it grants, with an `-approval` segment in the name when activation requires approval.
-- Azure RBAC role assignments at management group (including the Tenant Root Group), subscription, or resource group scope.
+- Azure RBAC role assignments at management group (including the Tenant Root Group), subscription, or resource group scope — one assignment per scope, so a `scope_bundles` entry fans one role out over many scopes under a single group.
 - Tenant-wide Microsoft Entra ID (directory) role assignments for Entra-only access groups.
 - Service-role access groups (`rbac-<service>-<service_role>`, e.g. `rbac-intune-helpdeskoperator`): the group, its PIM policy and eligibility schedules are created here; the role itself is bound to the group inside that service, by that service's admins.
 - PIM for Groups activation policies (duration, MFA, justification, approval) on access groups with PIM enabled.
@@ -99,7 +99,7 @@ or a role that lives inside another service (Intune and similar). The module cre
 }
 ```
 
-Azure RBAC group names are derived from the role code (`rbac-mg-landingzones-vmcontributor`); scope is `management_group`, `subscription`, `subscription` + `resource_group`, or `tenant_root = true` for the Tenant Root Group — its management group ID is the tenant ID, composed from `var.tenant_id`, so no GUID enters the name (`rbac-tenant-mgcontributor`). Entra-only groups need an explicit `name_suffix` instead, and one activation of such a group grants every listed role at once. Service entries take no scope and no `name_suffix`: the name is `rbac-<service>-<service_role>`, and this module never touches the service-side role binding — hand the group's object ID (from the `access_groups` output) to the service's admins, who assign `service_role` to it there. Names also state the approval requirement: when the resolved PIM settings require approval, the name gains a trailing `-approval` segment (`rbac-sub-payroll-prod-owner-approval`), because the PIM policy — approval included — belongs to the group. Every PIM setting is explicit: set it on the entry's `pim` block, or leave it to `access_group_defaults` — nothing is inferred from the role name.
+Azure RBAC group names are derived from the role code (`rbac-mg-landingzones-vmcontributor`); scope is `management_group`, `subscription`, `subscription` + `resource_group`, `tenant_root = true` for the Tenant Root Group — its management group ID is the tenant ID, composed from `var.tenant_id`, so no GUID enters the name (`rbac-tenant-mgcontributor`) — or `bundle` for a named set of scope IDs from `var.scope_bundles`, where the bundle name is the naming token (`rbac-jumpbox-reader`). Entra-only groups need an explicit `name_suffix` instead, and one activation of such a group grants every listed role at once. Service entries take no scope and no `name_suffix`: the name is `rbac-<service>-<service_role>`, and this module never touches the service-side role binding — hand the group's object ID (from the `access_groups` output) to the service's admins, who assign `service_role` to it there. Names also state the approval requirement: when the resolved PIM settings require approval, the name gains a trailing `-approval` segment (`rbac-sub-payroll-prod-owner-approval`), because the PIM policy — approval included — belongs to the group. Every PIM setting is explicit: set it on the entry's `pim` block, or leave it to `access_group_defaults` — nothing is inferred from the role name.
 
 ### Different approval requirements need different groups
 
@@ -123,6 +123,38 @@ The activation policy (approval, duration, justification) is a property of the a
 
 With identical policy, put both function groups in the same entry's `members` instead — one group, one policy. The `-approval` segment is reserved: `name_suffix`, `service_role` and custom role codes must not be or end in `approval`.
 
+### One role, many scopes: scope bundles
+
+Some grants are one role repeated across many individual resources — Bastion RDP to a jump host, for example, needs `Reader` on each VM, NIC, vNet and the bastion host itself. A scope bundle names that set once in `var.scope_bundles`; entries then reference it, and the module makes one role assignment per scope ID under a single group (one PIM policy, one eligibility wiring):
+
+```hcl
+scope_bundles = {
+  jumpbox = [
+    "/subscriptions/.../resourceGroups/rg-hub-australiaeast/providers/Microsoft.Network/bastionHosts/bas-hub-australiaeast",
+    "/subscriptions/.../resourceGroups/rg-alz-platform-prd-australiaeast-001/providers/Microsoft.Network/virtualNetworks/vnet-platform-prd-australiaeast",
+    # ... VMs and NICs ...
+  ]
+}
+```
+
+```hcl
+{
+  azure_role = "Reader"
+  scope      = { bundle = "jumpbox" }
+  members    = ["fn-jumpbox-staff"] # internal staff: permanent, as before
+  pim        = { enabled = false } # -> rbac-jumpbox-reader
+}
+
+{
+  azure_role = "Reader"
+  scope      = { bundle = "jumpbox" }
+  members    = ["fn-jumpbox-vendors"] # vendors: activation with approval
+  pim        = { require_approval = true } # -> rbac-jumpbox-reader-approval
+}
+```
+
+Editing a bundle's contents only adds or removes role assignments — the group, its PIM policy and its eligibility schedules are untouched. Renaming the bundle key renames and replaces the groups.
+
 ## Key inputs
 
 | Input                 | Description                                                                        |
@@ -130,6 +162,7 @@ With identical policy, put both function groups in the same entry's `members` in
 | subscription_id       | Subscription the azurerm provider signs in to (documentation of intent).           |
 | subscriptions         | Subscription CAF name => subscription ID, used to build scopes and group names.    |
 | tenant_id             | Entra tenant ID; required by `scope = { tenant_root = true }` (the Tenant Root Group's ID). |
+| scope_bundles         | Bundle name => absolute scope IDs sharing one role, referenced as `scope = { bundle = "<name>" }`. |
 | access_group_owners   | Object IDs of the principals that own every access group.                          |
 | access_group_defaults | Baseline PIM settings; a group's own `pim` block overrides field by field.         |
 | access_groups         | One entry per access group: Azure role + scope, Entra roles, or `service` + `service_role`; members, PIM overrides. |
@@ -183,7 +216,7 @@ Examples:
 
 ## Outputs
 
-- access_groups — the access groups managed here and what each one grants (object ID, role(s) or service binding, scope, members, resolved PIM settings). Useful for access reviews, audit reporting, and handing group object IDs to other teams (including the service admins who bind service roles to `rbac-<service>-*` groups).
+- access_groups — the access groups managed here and what each one grants (object ID, role(s) or service binding, scope IDs, members, resolved PIM settings). Useful for access reviews, audit reporting, and handing group object IDs to other teams (including the service admins who bind service roles to `rbac-<service>-*` groups).
 
 ## Deployment permissions
 
@@ -201,12 +234,13 @@ The plan fails on:
 - Setting more than one of `azure_role`, `entra_roles`, `service`, or none of them
 - `service` without `service_role`, or a `service`/`service_role` that isn't a lowercase slug (letters, digits, single hyphens)
 - An Entra-only group without `name_suffix`, or a `name_suffix` on an Azure RBAC or service group
-- A scope mismatch: `azure_role` without a scope, or `entra_roles`/`service` with one; a scope with more than one of `management_group`, `subscription`, `tenant_root`, or `tenant_root = false`
+- A scope mismatch: `azure_role` without a scope, or `entra_roles`/`service` with one; a scope with more than one of `management_group`, `subscription`, `tenant_root`, `bundle`, or `tenant_root = false`
 - Entra ID roles on a group whose resolved settings don't have `entra_role_assignable = true`
 - An Azure RBAC role with no role code (add it to `naming.tf` or `custom_roles`)
 - An invalid `maximum_duration` (ISO 8601 like `PT4H`/`P1D`) when PIM is enabled
 - `require_approval = true` without an `approver_group` (on the group or in `access_group_defaults`)
 - A subscription missing from `var.subscriptions`
+- `scope = { bundle = "<name>" }` where `<name>` isn't in `var.scope_bundles`, a bundle name that isn't a lowercase slug, an empty bundle, or a bundle scope ID that isn't absolute (starts with `/`, no spaces)
 - `scope = { tenant_root = true }` without `var.tenant_id`, or a `tenant_id` that isn't a GUID
 - Members that aren't `fn-` groups
 - Two entries that resolve to the same group name (same role, scope and approval requirement)
@@ -217,7 +251,7 @@ The plan fails on:
 
 ## Implementation notes
 
-- A change to an entry's role, service pair (`service` + `service_role`) or scope changes the group name, so Terraform replaces the group. This is intended, because the name describes what the group grants.
+- A change to an entry's role, service pair (`service` + `service_role`) or scope changes the group name, so Terraform replaces the group. This is intended, because the name describes what the group grants. For bundle entries the bundle key is the scope: editing the bundle's scope IDs only churns role assignments, the group stays.
 - Flipping a group's resolved `require_approval` (or `enabled`) moves the `-approval` segment in or out of the name, so the group is replaced; the name states the governance that applies.
 - One approval-gated group per role and scope: two entries that differ only in `approver_group` resolve to the same name and fail the plan.
 - A service entry with `pim = { enabled = false }` gets plain active membership like any other group — legal, but the usual intent for service roles is PIM.

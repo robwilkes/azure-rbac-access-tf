@@ -29,30 +29,34 @@ locals {
   # Pass 1: scope kind. Entra-only groups (no scope) are tenant-scoped.
   _scoped = [
     for g in var.access_groups : merge(g, {
-      scope_kind = g.scope == null ? "tenant" : (g.scope.tenant_root == true ? "tenant-root" : (g.scope.resource_group != null ? "rg" : (g.scope.subscription != null ? "sub" : "mg")))
+      scope_kind = g.scope == null ? "tenant" : (g.scope.bundle != null ? "bundle" : (g.scope.tenant_root == true ? "tenant-root" : (g.scope.resource_group != null ? "rg" : (g.scope.subscription != null ? "sub" : "mg"))))
     })
   ]
 
-  # Pass 2: name parts and scope ID. coalesce() keeps the unused map entries null-safe;
+  # Pass 2: name parts and scope IDs. coalesce() keeps the unused map entries null-safe;
   # the outer ternary skips them entirely for tenant-scoped groups, where g.scope is null.
   # Service entries use the service name as the naming token and carry no scope ID.
+  # Bundle entries take their scope IDs from var.scope_bundles and use the bundle name
+  # as the naming token; an undefined bundle resolves to an empty list, caught by a
+  # standard precondition.
   _resolved = [
     for g in local._scoped : merge(g, {
       role_code = g.azure_role != null ? lookup(local.role_codes, g.azure_role, "unknown-role") : null
 
       scope_token = g.service != null ? g.service : (g.scope == null ? "entra" : {
+        bundle      = coalesce(g.scope.bundle, "-")
         tenant-root = "tenant"
         mg          = "mg-${coalesce(g.scope.management_group, "-")}"
         sub         = coalesce(g.scope.subscription, "-")
         rg          = coalesce(g.scope.resource_group, "-")
       }[g.scope_kind])
 
-      scope_id = g.scope == null ? null : {
+      scope_ids = g.scope == null ? null : (g.scope.bundle != null ? tolist(toset(lookup(var.scope_bundles, coalesce(g.scope.bundle, "-"), []))) : [{
         tenant-root = "/providers/Microsoft.Management/managementGroups/${coalesce(var.tenant_id, "unknown-tenant")}"
         mg          = "/providers/Microsoft.Management/managementGroups/${coalesce(g.scope.management_group, "-")}"
         sub         = "/subscriptions/${lookup(var.subscriptions, coalesce(g.scope.subscription, "-"), "unknown-subscription")}"
         rg          = "/subscriptions/${lookup(var.subscriptions, coalesce(g.scope.subscription, "-"), "unknown-subscription")}/resourceGroups/${coalesce(g.scope.resource_group, "-")}"
-      }[g.scope_kind]
+      }[g.scope_kind]])
     })
   ]
 
@@ -121,6 +125,23 @@ locals {
         }
       ]
     ]) : m.key => m
+  }
+
+  # One entry per (access group, scope) pair for Azure RBAC role assignments; a
+  # scope bundle fans one role out into one assignment per scope ID. Keys are
+  # "<group>|<scope id>" - scope IDs never contain a pipe.
+  role_assignment_pairs = {
+    for p in flatten([
+      for name, g in local.access_groups : g.azure_role != null ? [
+        for sid in g.scope_ids : {
+          key            = "${name}|${sid}"
+          group          = name
+          scope_id       = sid
+          role_name      = g.azure_role
+          custom_role_id = g.custom_role_id
+        }
+      ] : []
+    ]) : p.key => p
   }
 
   function_groups = toset(flatten([for g in values(local.access_groups) : g.members]))

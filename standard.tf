@@ -31,14 +31,19 @@ resource "terraform_data" "access_group_standard" {
     }
 
     precondition {
-      condition = each.value.scope_id == null || !strcontains(each.value.scope_id, "unknown-subscription")
+      condition = each.value.scope_ids == null || alltrue([for sid in each.value.scope_ids : !strcontains(sid, "unknown-subscription")])
       # try() keeps the message evaluable for tenant-scoped groups (scope is null); Terraform evaluates error_message even when the condition passes.
       error_message = "${each.key}: subscription \"${coalesce(try(each.value.scope.subscription, null), "-")}\" isn't in var.subscriptions."
     }
 
     precondition {
-      condition     = each.value.scope_id == null || !strcontains(each.value.scope_id, "unknown-tenant")
+      condition     = each.value.scope_ids == null || try(each.value.scope.tenant_root, false) != true || !strcontains(each.value.scope_ids[0], "unknown-tenant")
       error_message = "${each.key}: scope = { tenant_root = true } needs var.tenant_id set to the tenant's ID (the Tenant Root Group's management group ID)."
+    }
+
+    precondition {
+      condition     = each.value.scope_ids == null || length(each.value.scope_ids) > 0
+      error_message = "${each.key}: scope bundle \"${coalesce(try(each.value.scope.bundle, null), "-")}\" isn't in var.scope_bundles."
     }
 
     precondition {

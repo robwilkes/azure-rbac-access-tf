@@ -38,6 +38,20 @@ module "rbac_access" {
   # module composes the scope from this instead of a GUID in the entry.
   tenant_id = "00000000-0000-0000-0000-000000000000"
 
+  # Named sets of scope IDs sharing one role. Bastion RDP to jump hosts needs
+  # Reader on each VM, NIC, vNet and the bastion host itself; a bundle keeps
+  # that one access group (one PIM policy) instead of one group per resource.
+  scope_bundles = {
+    jumpbox = [
+      "/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/rg-hub-aue-001/providers/Microsoft.Network/bastionHosts/bas-hub-aue-001",
+      "/subscriptions/44444444-4444-4444-4444-444444444444/resourceGroups/rg-alz-jump-prd-aue-001/providers/Microsoft.Network/networkInterfaces/nic-01-jump-prd-aue-001",
+      "/subscriptions/44444444-4444-4444-4444-444444444444/resourceGroups/rg-alz-jump-prd-aue-001/providers/Microsoft.Network/networkInterfaces/nic-02-jump-prd-aue-001",
+      "/subscriptions/44444444-4444-4444-4444-444444444444/resourceGroups/rg-alz-jump-prd-aue-001/providers/Microsoft.Compute/virtualMachines/vm-jump-prd-aue-001",
+      "/subscriptions/44444444-4444-4444-4444-444444444444/resourceGroups/rg-alz-jump-prd-aue-001/providers/Microsoft.Compute/virtualMachines/vm-jump-prd-aue-002",
+      "/subscriptions/44444444-4444-4444-4444-444444444444/resourceGroups/rg-alz-jump-prd-aue-001/providers/Microsoft.Network/virtualNetworks/vnet-jump-prd-aue-001",
+    ]
+  }
+
   access_group_owners = ["33333333-3333-3333-3333-333333333333"] # platform team deployment SP
 
   # Baseline for every access group; a group's own pim block overrides field by field.
@@ -60,6 +74,22 @@ module "rbac_access" {
       azure_role = "Management Group Contributor"
       scope      = { tenant_root = true } # -> rbac-tenant-mgcontributor
       members    = ["fn-platform-leads"]
+    },
+
+    # Jump host RDP via Bastion: one role across many scopes (scope_bundles).
+    # Internal staff keep permanent active membership; vendors only get in via
+    # PIM activation with approval, so their group name carries -approval.
+    {
+      azure_role = "Reader"
+      scope      = { bundle = "jumpbox" } # -> rbac-jumpbox-reader
+      members    = ["fn-jumpbox-staff"]
+      pim        = { enabled = false }
+    },
+    {
+      azure_role = "Reader"
+      scope      = { bundle = "jumpbox" } # -> rbac-jumpbox-reader-approval, approvers inherited from defaults
+      members    = ["fn-jumpbox-vendors"]
+      pim        = { require_approval = true }
     },
 
     # Service desk: central operations, so management group scope

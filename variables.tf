@@ -70,6 +70,26 @@ variable "custom_roles" {
 }
 
 #------------------------------------------------------------------------------
+# Scope bundles
+#------------------------------------------------------------------------------
+
+variable "scope_bundles" {
+  type        = map(list(string))
+  default     = {}
+  description = "Bundle name => absolute Azure scope IDs that share one role (e.g. the VM, NIC, vNet and bastion host that all need Reader for Bastion RDP). Referenced as scope = { bundle = \"<name>\" }; the bundle name is the scope token in the group name rbac-<bundle>-<role code>."
+
+  validation {
+    condition     = alltrue([for name, ids in var.scope_bundles : can(regex("^[a-z0-9]+(-[a-z0-9]+)*$", name)) && length(ids) > 0])
+    error_message = "Scope bundle names are lowercase slugs (letters, digits, single hyphens), and each bundle lists at least one scope ID."
+  }
+
+  validation {
+    condition     = alltrue(flatten([for ids in values(var.scope_bundles) : [for id in ids : can(regex("^/[^ ]+[^ /]$", id))]]))
+    error_message = "Scope bundle IDs must be absolute (start with /), contain no spaces, and not end with /."
+  }
+}
+
+#------------------------------------------------------------------------------
 # Access groups
 #------------------------------------------------------------------------------
 
@@ -85,6 +105,7 @@ variable "access_groups" {
       subscription     = optional(string) # key in var.subscriptions
       resource_group   = optional(string) # needs subscription
       tenant_root      = optional(bool)   # true: the Tenant Root Group; needs var.tenant_id; the GUID never enters the group name
+      bundle           = optional(string) # key in var.scope_bundles: one role across many scopes; the bundle name is the naming token
     }))
     members = list(string) # function groups (fn-*)
     pim = optional(object({
@@ -142,8 +163,8 @@ variable "access_groups" {
   }
 
   validation {
-    condition     = alltrue([for g in var.access_groups : g.scope == null || (g.scope.management_group != null ? 1 : 0) + (g.scope.subscription != null ? 1 : 0) + (g.scope.tenant_root == true ? 1 : 0) == 1])
-    error_message = "Each scope sets exactly one of management_group, subscription (plus an optional resource_group), or tenant_root = true."
+    condition     = alltrue([for g in var.access_groups : g.scope == null || (g.scope.management_group != null ? 1 : 0) + (g.scope.subscription != null ? 1 : 0) + (g.scope.tenant_root == true ? 1 : 0) + (g.scope.bundle != null ? 1 : 0) == 1])
+    error_message = "Each scope sets exactly one of management_group, subscription (plus an optional resource_group), tenant_root = true, or bundle (a key of var.scope_bundles)."
   }
 
   validation {
