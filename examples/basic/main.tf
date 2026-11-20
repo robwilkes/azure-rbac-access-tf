@@ -34,6 +34,10 @@ module "rbac_access" {
     "sub-payroll-prod" = "11111111-1111-1111-1111-111111111111"
   }
 
+  # Tenant Root Group scope: its management group ID is the tenant ID, so the
+  # module composes the scope from this instead of a GUID in the entry.
+  tenant_id = "00000000-0000-0000-0000-000000000000"
+
   access_group_owners = ["33333333-3333-3333-3333-333333333333"] # platform team deployment SP
 
   # Baseline for every access group; a group's own pim block overrides field by field.
@@ -50,6 +54,14 @@ module "rbac_access" {
 
   # One entry per access group. Names are derived; PIM settings are explicit, or inherited from the defaults.
   access_groups = [
+    # Tenant Root Group: management-plane delegation over the whole Azure estate.
+    # scope = { tenant_root = true } takes the scope ID from var.tenant_id, so no GUID in the name.
+    {
+      azure_role = "Management Group Contributor"
+      scope      = { tenant_root = true } # -> rbac-tenant-mgcontributor
+      members    = ["fn-platform-leads"]
+    },
+
     # Service desk: central operations, so management group scope
     {
       azure_role = "Virtual Machine Contributor" # inherits defaults: PIM, MFA + justification, 8 h, no approval

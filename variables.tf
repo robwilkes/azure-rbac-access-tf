@@ -12,6 +12,17 @@ variable "subscriptions" {
   description = "Subscription CAF name (as used in group names, e.g. sub-payroll-prod) => subscription ID."
 }
 
+variable "tenant_id" {
+  type        = string
+  default     = null
+  description = "The Entra tenant ID. Required by entries with scope = { tenant_root = true }: the Tenant Root Group's management group ID is the tenant ID."
+
+  validation {
+    condition     = var.tenant_id == null || can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", var.tenant_id))
+    error_message = "tenant_id must be a GUID, e.g. \"dafd8e97-d9be-460b-bc05-7ce7b13a1113\"."
+  }
+}
+
 #------------------------------------------------------------------------------
 # Access group ownership and PIM defaults
 #------------------------------------------------------------------------------
@@ -73,6 +84,7 @@ variable "access_groups" {
       management_group = optional(string)
       subscription     = optional(string) # key in var.subscriptions
       resource_group   = optional(string) # needs subscription
+      tenant_root      = optional(bool)   # true: the Tenant Root Group; needs var.tenant_id; the GUID never enters the group name
     }))
     members = list(string) # function groups (fn-*)
     pim = optional(object({
@@ -130,8 +142,13 @@ variable "access_groups" {
   }
 
   validation {
-    condition     = alltrue([for g in var.access_groups : g.scope == null || (g.scope.management_group != null) != (g.scope.subscription != null)])
-    error_message = "Each scope sets either management_group or subscription (plus an optional resource_group), not both."
+    condition     = alltrue([for g in var.access_groups : g.scope == null || (g.scope.management_group != null ? 1 : 0) + (g.scope.subscription != null ? 1 : 0) + (g.scope.tenant_root == true ? 1 : 0) == 1])
+    error_message = "Each scope sets exactly one of management_group, subscription (plus an optional resource_group), or tenant_root = true."
+  }
+
+  validation {
+    condition     = alltrue([for g in var.access_groups : g.scope == null || g.scope.tenant_root == null || g.scope.tenant_root])
+    error_message = "scope.tenant_root is set to true or left out: omit the attribute for management_group and subscription scopes."
   }
 
   validation {

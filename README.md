@@ -5,7 +5,7 @@ This module implements the Azure RBAC access standard: cloud-only `rbac-` access
 It creates:
 
 - A cloud-only security group (`rbac-*`) per access entry, named after what it grants, with an `-approval` segment in the name when activation requires approval.
-- Azure RBAC role assignments at management group, subscription, or resource group scope.
+- Azure RBAC role assignments at management group (including the Tenant Root Group), subscription, or resource group scope.
 - Tenant-wide Microsoft Entra ID (directory) role assignments for Entra-only access groups.
 - Service-role access groups (`rbac-<service>-<service_role>`, e.g. `rbac-intune-helpdeskoperator`): the group, its PIM policy and eligibility schedules are created here; the role itself is bound to the group inside that service, by that service's admins.
 - PIM for Groups activation policies (duration, MFA, justification, approval) on access groups with PIM enabled.
@@ -35,6 +35,7 @@ module "rbac_access" {
 
   subscription_id     = "00000000-0000-0000-0000-000000000000"
   subscriptions       = { "sub-payroll-prod" = "11111111-1111-1111-1111-111111111111" }
+  tenant_id           = "00000000-0000-0000-0000-000000000000" # needed by scope = { tenant_root = true }
   access_group_owners = ["33333333-3333-3333-3333-333333333333"]
 
   access_group_defaults = {
@@ -53,6 +54,11 @@ module "rbac_access" {
       azure_role = "Virtual Machine Contributor"
       scope      = { management_group = "landingzones" }
       members    = ["fn-helpdesk"]
+    },
+    {
+      azure_role = "Management Group Contributor"
+      scope      = { tenant_root = true } # Tenant Root Group: scope ID composed from tenant_id, so rbac-tenant-mgcontributor has no GUID
+      members    = ["fn-platform-leads"]
     },
   ]
 }
@@ -93,7 +99,7 @@ or a role that lives inside another service (Intune and similar). The module cre
 }
 ```
 
-Azure RBAC group names are derived from the role code (`rbac-mg-landingzones-vmcontributor`); scope is `management_group`, `subscription`, or `subscription` + `resource_group`. Entra-only groups need an explicit `name_suffix` instead, and one activation of such a group grants every listed role at once. Service entries take no scope and no `name_suffix`: the name is `rbac-<service>-<service_role>`, and this module never touches the service-side role binding — hand the group's object ID (from the `access_groups` output) to the service's admins, who assign `service_role` to it there. Names also state the approval requirement: when the resolved PIM settings require approval, the name gains a trailing `-approval` segment (`rbac-sub-payroll-prod-owner-approval`), because the PIM policy — approval included — belongs to the group. Every PIM setting is explicit: set it on the entry's `pim` block, or leave it to `access_group_defaults` — nothing is inferred from the role name.
+Azure RBAC group names are derived from the role code (`rbac-mg-landingzones-vmcontributor`); scope is `management_group`, `subscription`, `subscription` + `resource_group`, or `tenant_root = true` for the Tenant Root Group — its management group ID is the tenant ID, composed from `var.tenant_id`, so no GUID enters the name (`rbac-tenant-mgcontributor`). Entra-only groups need an explicit `name_suffix` instead, and one activation of such a group grants every listed role at once. Service entries take no scope and no `name_suffix`: the name is `rbac-<service>-<service_role>`, and this module never touches the service-side role binding — hand the group's object ID (from the `access_groups` output) to the service's admins, who assign `service_role` to it there. Names also state the approval requirement: when the resolved PIM settings require approval, the name gains a trailing `-approval` segment (`rbac-sub-payroll-prod-owner-approval`), because the PIM policy — approval included — belongs to the group. Every PIM setting is explicit: set it on the entry's `pim` block, or leave it to `access_group_defaults` — nothing is inferred from the role name.
 
 ### Different approval requirements need different groups
 
@@ -123,6 +129,7 @@ With identical policy, put both function groups in the same entry's `members` in
 | --------------------- | ------------------------------------------------------------------------------------ |
 | subscription_id       | Subscription the azurerm provider signs in to (documentation of intent).           |
 | subscriptions         | Subscription CAF name => subscription ID, used to build scopes and group names.    |
+| tenant_id             | Entra tenant ID; required by `scope = { tenant_root = true }` (the Tenant Root Group's ID). |
 | access_group_owners   | Object IDs of the principals that own every access group.                          |
 | access_group_defaults | Baseline PIM settings; a group's own `pim` block overrides field by field.         |
 | access_groups         | One entry per access group: Azure role + scope, Entra roles, or `service` + `service_role`; members, PIM overrides. |
@@ -184,7 +191,7 @@ Deploying this module requires the appropriate Azure RBAC and Microsoft Entra pe
 
 - Microsoft Graph application permissions: `Group.ReadWrite.All`, `RoleManagement.ReadWrite.Directory` (for role-assignable groups and Entra ID role assignment), `RoleManagementPolicy.ReadWrite.AzureADGroup`, `PrivilegedEligibilitySchedule.ReadWrite.AzureADGroup`
 - The identity must be Privileged Role Administrator (or Global Administrator) to create and manage role-assignable groups.
-- Azure: Role Based Access Control Administrator, conditioned to group principals, at the top management group the scopes sit under.
+- Azure: Role Based Access Control Administrator, conditioned to group principals, at the top management group the scopes sit under — for `tenant_root` entries, at the Tenant Root Group.
 - Service-role groups need no extra permissions: only the group and its PIM wiring are created here. Binding the role inside the service (e.g. Intune's Helpdesk Operator) is done with that service admin's own permissions.
 
 ## Plan-time validation
@@ -194,12 +201,13 @@ The plan fails on:
 - Setting more than one of `azure_role`, `entra_roles`, `service`, or none of them
 - `service` without `service_role`, or a `service`/`service_role` that isn't a lowercase slug (letters, digits, single hyphens)
 - An Entra-only group without `name_suffix`, or a `name_suffix` on an Azure RBAC or service group
-- A scope mismatch: `azure_role` without a scope, or `entra_roles`/`service` with one
+- A scope mismatch: `azure_role` without a scope, or `entra_roles`/`service` with one; a scope with more than one of `management_group`, `subscription`, `tenant_root`, or `tenant_root = false`
 - Entra ID roles on a group whose resolved settings don't have `entra_role_assignable = true`
 - An Azure RBAC role with no role code (add it to `naming.tf` or `custom_roles`)
 - An invalid `maximum_duration` (ISO 8601 like `PT4H`/`P1D`) when PIM is enabled
 - `require_approval = true` without an `approver_group` (on the group or in `access_group_defaults`)
 - A subscription missing from `var.subscriptions`
+- `scope = { tenant_root = true }` without `var.tenant_id`, or a `tenant_id` that isn't a GUID
 - Members that aren't `fn-` groups
 - Two entries that resolve to the same group name (same role, scope and approval requirement)
 - A `name_suffix`, `service_role` or custom role code that is or ends in `approval` (that name segment is reserved)

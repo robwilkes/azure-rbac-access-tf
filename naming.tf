@@ -11,6 +11,8 @@ locals {
     "Owner"                                   = "owner"
     "Contributor"                             = "contributor"
     "Reader"                                  = "reader"
+    "Management Group Contributor"            = "mgcontributor"
+    "Management Group Reader"                 = "mgreader"
     "User Access Administrator"               = "uaa"
     "Role Based Access Control Administrator" = "rbacadmin"
     "Virtual Machine Contributor"             = "vmcontributor"
@@ -27,7 +29,7 @@ locals {
   # Pass 1: scope kind. Entra-only groups (no scope) are tenant-scoped.
   _scoped = [
     for g in var.access_groups : merge(g, {
-      scope_kind = g.scope == null ? "tenant" : (g.scope.resource_group != null ? "rg" : (g.scope.subscription != null ? "sub" : "mg"))
+      scope_kind = g.scope == null ? "tenant" : (g.scope.tenant_root == true ? "tenant-root" : (g.scope.resource_group != null ? "rg" : (g.scope.subscription != null ? "sub" : "mg")))
     })
   ]
 
@@ -39,15 +41,17 @@ locals {
       role_code = g.azure_role != null ? lookup(local.role_codes, g.azure_role, "unknown-role") : null
 
       scope_token = g.service != null ? g.service : (g.scope == null ? "entra" : {
-        mg  = "mg-${coalesce(g.scope.management_group, "-")}"
-        sub = coalesce(g.scope.subscription, "-")
-        rg  = coalesce(g.scope.resource_group, "-")
+        tenant-root = "tenant"
+        mg          = "mg-${coalesce(g.scope.management_group, "-")}"
+        sub         = coalesce(g.scope.subscription, "-")
+        rg          = coalesce(g.scope.resource_group, "-")
       }[g.scope_kind])
 
       scope_id = g.scope == null ? null : {
-        mg  = "/providers/Microsoft.Management/managementGroups/${coalesce(g.scope.management_group, "-")}"
-        sub = "/subscriptions/${lookup(var.subscriptions, coalesce(g.scope.subscription, "-"), "unknown-subscription")}"
-        rg  = "/subscriptions/${lookup(var.subscriptions, coalesce(g.scope.subscription, "-"), "unknown-subscription")}/resourceGroups/${coalesce(g.scope.resource_group, "-")}"
+        tenant-root = "/providers/Microsoft.Management/managementGroups/${coalesce(var.tenant_id, "unknown-tenant")}"
+        mg          = "/providers/Microsoft.Management/managementGroups/${coalesce(g.scope.management_group, "-")}"
+        sub         = "/subscriptions/${lookup(var.subscriptions, coalesce(g.scope.subscription, "-"), "unknown-subscription")}"
+        rg          = "/subscriptions/${lookup(var.subscriptions, coalesce(g.scope.subscription, "-"), "unknown-subscription")}/resourceGroups/${coalesce(g.scope.resource_group, "-")}"
       }[g.scope_kind]
     })
   ]

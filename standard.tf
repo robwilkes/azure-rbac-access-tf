@@ -37,6 +37,11 @@ resource "terraform_data" "access_group_standard" {
     }
 
     precondition {
+      condition     = each.value.scope_id == null || !strcontains(each.value.scope_id, "unknown-tenant")
+      error_message = "${each.key}: scope = { tenant_root = true } needs var.tenant_id set to the tenant's ID (the Tenant Root Group's management group ID)."
+    }
+
+    precondition {
       condition     = !each.value.pim.enabled || can(regex("^(PT?\\d+[HM]|P\\d+D(T\\d+[HM])?)$", each.value.pim.maximum_duration))
       error_message = "${each.key}: maximum_duration \"${each.value.pim.maximum_duration}\" is not an ISO 8601 duration (e.g. PT4H, P1D)."
     }
