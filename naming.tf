@@ -35,12 +35,11 @@ locals {
     })
   ]
 
-  # Pass 2: name parts and scope IDs. coalesce() keeps the unused map entries null-safe;
-  # the outer ternary skips them entirely for tenant-scoped groups, where g.scope is null.
-  # Service entries use the service name as the naming token and carry no scope ID.
-  # Bundle entries take their scope IDs from var.scope_bundles and use the bundle name
-  # as the naming token; an undefined bundle resolves to an empty list, caught by a
-  # standard precondition.
+  # Pass 2: name parts and scope IDs. Tenant-scoped groups skip the scope map
+  # entirely (g.scope is null); coalesce() keeps the unused entries null-safe.
+  # Service entries use the service name as token; bundle entries take their
+  # scope IDs from var.scope_bundles - an undefined bundle yields [] and fails
+  # a standard precondition.
   _resolved = [
     for g in local._scoped : merge(g, {
       role_code = g.azure_role != null ? lookup(local.role_codes, g.azure_role, "unknown-role") : null
@@ -62,12 +61,11 @@ locals {
     })
   ]
 
-  # Pass 3: PIM settings resolved field by field (the group's own pim block wins,
-  # unset fields inherit var.access_group_defaults; nothing is inferred from the
-  # role), plus the custom role ID. g.pim is null (not an error) when absent, and
-  # its unset optional fields are null, so each field checks both before falling
-  # back to the default. A for expression over the object would not work here: it
-  # unifies all value types to string, turning booleans into "true"/"false".
+  # Pass 3: PIM settings field by field (the group's pim block wins; unset
+  # fields inherit var.access_group_defaults; nothing is inferred from the
+  # role), plus the custom role ID. Each field checks g.pim and the field for
+  # null before the default - no for expression here: it unifies value types
+  # to string, turning booleans into "true"/"false".
   _pimmed = [
     for g in local._resolved : merge(g, {
       pim = {
@@ -84,14 +82,12 @@ locals {
     })
   ]
 
-  # Final map, keyed by the derived group name: rbac-<scope token>-<name part>,
-  # the name part being the service slug, the Azure role code, or the Entra
-  # name_suffix, and a trailing -approval segment when activation requires
-  # approval (the PIM policy is per group, so groups that differ only in
-  # approval must be named differently). Reserved: the name part itself never
-  # is or ends in approval (validated in variables.tf). Two entries that
-  # resolve to the same name (same role, same scope, same approval
-  # requirement) fail the plan with a duplicate key error.
+  # Final map keyed by derived group name: rbac-<scope token>-<name part>, the
+  # name part being the service slug, Azure role code, or Entra name_suffix,
+  # plus a trailing -approval when activation requires approval (the PIM
+  # policy is per group, so approval-gated groups need distinct names). The
+  # name part never is or ends in "approval" (validated in variables.tf); two
+  # entries resolving to the same name fail the plan with a duplicate key.
   access_groups = {
     for g in local._pimmed : "rbac-${g.scope_token}-${g.service != null ? g.service_role : (g.role_code != null ? g.role_code : g.name_suffix)}${g.pim.enabled && g.pim.require_approval ? "-approval" : ""}" => g
   }
@@ -99,14 +95,17 @@ locals {
   # Groups with a PIM policy (eligible membership).
   pim_groups = { for name, g in local.access_groups : name => g if g.pim.enabled }
 
-  # Distinct Entra ID role names actually used; looked up by display name so a typo fails the plan.
+  # Distinct Entra ID role names actually used; each must resolve (entra_roles.tf) or the plan fails.
   entra_role_names = toset(flatten([for g in values(local.access_groups) : g.entra_roles]))
 
-  # One entry per (access group, Entra ID role) pair.
+  # One entry per (access group, Entra ID role) pair. role_key is the display
+  # name normalised for lookup (lower-cased, trimmed), precomputed here so the
+  # assignment resource indexes by a plain attribute reference and the
+  # normalisation lives in one place.
   entra_role_pairs = {
     for p in flatten([
       for name, g in local.access_groups : [
-        for r in g.entra_roles : { key = "${name}|${r}", group = name, role_name = r }
+        for r in g.entra_roles : { key = "${name}|${r}", group = name, role_name = r, role_key = lower(trimspace(r)) }
       ]
     ]) : p.key => p
   }

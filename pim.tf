@@ -1,8 +1,6 @@
 #------------------------------------------------------------------------------
-# PIM for Groups: groups with pim.enabled
-#
-# The activation policy on each PIM-enabled access group, plus the permanent
-# eligibility schedules that link the function groups in.
+# PIM for Groups: the activation policy on each PIM-enabled access group,
+# plus the permanent eligibility schedules that link function groups in.
 #------------------------------------------------------------------------------
 
 resource "azuread_group_role_management_policy" "member" {
@@ -33,7 +31,7 @@ resource "azuread_group_role_management_policy" "member" {
     expiration_required = false
   }
 
-  # Caps any active membership someone adds by hand outside Terraform. Omitted when null (no cap).
+  # Caps active membership added by hand outside Terraform; omitted when null.
   dynamic "active_assignment_rules" {
     for_each = each.value.pim.active_membership_expire_after == null ? [] : [1]
     content {

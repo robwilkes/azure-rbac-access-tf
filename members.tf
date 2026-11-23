@@ -1,8 +1,6 @@
 #------------------------------------------------------------------------------
-# No PIM: active membership
-#
-# For access groups with pim.enabled = false, function groups are added as
-# plain active members instead of PIM-eligible ones.
+# Access groups with pim.enabled = false: plain active membership instead of
+# PIM eligibility.
 #------------------------------------------------------------------------------
 
 resource "azuread_group_member" "active" {

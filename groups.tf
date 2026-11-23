@@ -1,7 +1,7 @@
 #------------------------------------------------------------------------------
-# Access groups: cloud-only, one Azure RBAC role at one scope or one scope
-# bundle, Entra ID roles tenant-wide, or a role assigned inside another service
-# (the role binding itself happens in that service, outside Terraform)
+# Access groups: cloud-only. One Azure RBAC role at one scope or bundle,
+# Entra ID roles tenant-wide, or a role bound inside another service (outside
+# Terraform).
 #------------------------------------------------------------------------------
 
 resource "azuread_group" "access" {

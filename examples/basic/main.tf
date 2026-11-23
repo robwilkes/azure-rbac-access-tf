@@ -16,8 +16,7 @@ terraform {
 provider "azurerm" {
   features {}
 
-  # Role assignments are made by this subscription's identity; scopes can
-  # target any management group or subscription this identity can manage.
+  # Role assignments run as this subscription's identity; scopes may target any management group or subscription it can manage.
   subscription_id = "00000000-0000-0000-0000-000000000000"
 }
 
@@ -45,11 +44,19 @@ module "rbac_access" {
     jumpbox = [
       "/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/rg-hub-aue-001/providers/Microsoft.Network/bastionHosts/bas-hub-aue-001",
       "/subscriptions/44444444-4444-4444-4444-444444444444/resourceGroups/rg-alz-jump-prd-aue-001/providers/Microsoft.Network/networkInterfaces/nic-01-jump-prd-aue-001",
-      "/subscriptions/44444444-4444-4444-4444-444444444444/resourceGroups/rg-alz-jump-prd-aue-001/providers/Microsoft.Network/networkInterfaces/nic-02-jump-prd-aue-001",
+      "/subscriptions/44444444-4444-4444-4444-444444444444/resourceGroups/rg-alz-jump-prd-aue-001/providers/Microsoft.Network/networkInterfaces/nic-01-jump-prd-aue-002",
       "/subscriptions/44444444-4444-4444-4444-444444444444/resourceGroups/rg-alz-jump-prd-aue-001/providers/Microsoft.Compute/virtualMachines/vm-jump-prd-aue-001",
       "/subscriptions/44444444-4444-4444-4444-444444444444/resourceGroups/rg-alz-jump-prd-aue-001/providers/Microsoft.Compute/virtualMachines/vm-jump-prd-aue-002",
       "/subscriptions/44444444-4444-4444-4444-444444444444/resourceGroups/rg-alz-jump-prd-aue-001/providers/Microsoft.Network/virtualNetworks/vnet-jump-prd-aue-001",
     ]
+  }
+
+  # Pins for custom roles created via the unified role management API - they
+  # never appear in the directory role list, so their names can't be resolved.
+  # Find each ID at GET /roleManagement/directory/roleDefinitions or in the
+  # portal URL of the role; omit when all entra_roles entries resolve by name.
+  entra_custom_role_ids = {
+    "Payroll Data Steward" = "99999999-9999-9999-9999-999999999999"
   }
 
   access_group_owners = ["33333333-3333-3333-3333-333333333333"] # platform team deployment SP

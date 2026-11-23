@@ -123,6 +123,22 @@ The activation policy (approval, duration, justification) is a property of the a
 
 With identical policy, put both function groups in the same entry's `members` instead — one group, one policy. The `-approval` segment is reserved: `name_suffix`, `service_role` and custom role codes must not be or end in `approval`.
 
+### Resolving Entra ID role names
+
+`entra_roles` entries are display names, matched case-insensitively and trimmed against three sources in ascending priority — the last match wins:
+
+1. **Activated directory roles** (`/directoryRoles`) — a custom role created through this API is assigned by its instance object ID.
+2. **Built-in role templates** (`/directoryRoleTemplates`) — every built-in role, activated or not. The assignment resource takes a built-in's *template* ID, so on a collision with an activated instance the template wins, and a built-in nobody has ever been assigned still resolves.
+3. **`var.entra_custom_role_ids`** — explicit display name => role definition ID pins for custom roles created via the unified role management API (`GET /roleManagement/directory/roleDefinitions`), which never appear in either list above:
+
+```hcl
+entra_custom_role_ids = {
+  "Payroll Data Steward" = "99999999-9999-9999-9999-999999999999" # find the ID at GET /roleManagement/directory/roleDefinitions or in the portal URL of the role
+}
+```
+
+A name that matches no source fails the plan with a message naming the group and the role. How each requested name resolved — the ID and its source (`pinned`, `template` or `instance`) — is an output, so a resolution is inspectable in the plan instead of silently applied (see `entra_roles` under Outputs).
+
 ### One role, many scopes: scope bundles
 
 Some grants are one role repeated across many individual resources — Bastion RDP to a jump host, for example, needs `Reader` on each VM, NIC, vNet and the bastion host itself. A scope bundle names that set once in `var.scope_bundles`; entries then reference it, and the module makes one role assignment per scope ID under a single group (one PIM policy, one eligibility wiring):
@@ -167,6 +183,7 @@ Editing a bundle's contents only adds or removes role assignments — the group,
 | access_group_defaults | Baseline PIM settings; a group's own `pim` block overrides field by field.         |
 | access_groups         | One entry per access group: Azure role + scope, Entra roles, or `service` + `service_role`; members, PIM overrides. |
 | custom_roles          | Custom role name => `{ code, id }` for roles outside the built-in role code list.  |
+| entra_custom_role_ids | Entra ID display name => role definition ID; pins custom roles created via the unified role management API that can't be resolved by name. Wins over the by-name lookup on a collision. |
 
 ## PIM settings
 
@@ -217,6 +234,7 @@ Examples:
 ## Outputs
 
 - access_groups — the access groups managed here and what each one grants (object ID, role(s) or service binding, scope IDs, members, resolved PIM settings). Useful for access reviews, audit reporting, and handing group object IDs to other teams (including the service admins who bind service roles to `rbac-<service>-*` groups).
+- entra_roles — how each requested Entra ID role display name resolved to a role ID: the id plus its source (`pinned`, `template` or `instance`); a null id means the name was not found and the plan fails before applying.
 
 ## Deployment permissions
 
@@ -245,6 +263,7 @@ The plan fails on:
 - Members that aren't `fn-` groups
 - Two entries that resolve to the same group name (same role, scope and approval requirement)
 - A `name_suffix`, `service_role` or custom role code that is or ends in `approval` (that name segment is reserved)
+- An Entra ID role display name that matches no built-in template, activated directory role, or pinned ID in `var.entra_custom_role_ids`
 - Names over 64 characters or not lowercase
 
 `naming.tf`, `standard.tf` and `variables.tf` need no Azure access, so they can be checked in CI.
@@ -273,5 +292,5 @@ The plan fails on:
 | `pim.tf`          | PIM activation policies and eligibility schedules                     |
 | `members.tf`      | Active membership for groups with PIM switched off                    |
 | `variables.tf`    | Inputs and input validation                                           |
-| `outputs.tf`      | `access_groups` output                                                |
+| `outputs.tf`      | `access_groups` and `entra_roles` outputs                             |
 | `examples/basic/` | Complete root module example (service desk, payroll, Entra and Intune)            |

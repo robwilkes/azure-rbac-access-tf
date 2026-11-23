@@ -1,5 +1,5 @@
 #------------------------------------------------------------------------------
-# Access groups: what was created and what each group grants
+# What was created: the access groups, and how each Entra role name resolved
 #------------------------------------------------------------------------------
 
 output "access_groups" {
@@ -16,4 +16,14 @@ output "access_groups" {
     }
   }
   description = "Access groups managed here and what each one grants, including the resolved PIM settings."
+}
+
+output "entra_roles" {
+  value = {
+    for name in local.entra_role_names : name => {
+      id     = try(local.entra_role_ids[lower(trimspace(name))], null)
+      source = try(local.entra_role_sources[lower(trimspace(name))], null)
+    }
+  }
+  description = "How each requested Entra ID role display name resolved to a role ID: the id plus its source - pinned (var.entra_custom_role_ids), template (built-in role, activated or not), or instance (activated directory role). A null id means the name was not found; the plan fails before applying."
 }

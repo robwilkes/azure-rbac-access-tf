@@ -1,7 +1,5 @@
 #------------------------------------------------------------------------------
-# Standard enforcement at plan time
-#
-# A failed precondition stops the plan before anything changes.
+# Plan-time standard checks: a failing precondition stops the plan.
 #------------------------------------------------------------------------------
 
 resource "terraform_data" "access_group_standard" {
@@ -32,7 +30,7 @@ resource "terraform_data" "access_group_standard" {
 
     precondition {
       condition = each.value.scope_ids == null || alltrue([for sid in each.value.scope_ids : !strcontains(sid, "unknown-subscription")])
-      # try() keeps the message evaluable for tenant-scoped groups (scope is null); Terraform evaluates error_message even when the condition passes.
+      # try() keeps the message evaluable for tenant-scoped groups (scope is null); same error_message caveat as above.
       error_message = "${each.key}: subscription \"${coalesce(try(each.value.scope.subscription, null), "-")}\" isn't in var.subscriptions."
     }
 

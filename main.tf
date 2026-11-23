@@ -1,9 +1,7 @@
 #------------------------------------------------------------------------------
-# Function groups: owned by AD, looked up only
-#
-# Function groups (fn-*) are synced from AD and must exist before the plan.
-# Approver groups are looked up by display name, only when a group actually
-# requires approval.
+# Groups looked up, not created: fn- function groups (owned by AD sync; must
+# exist before the plan) and approver groups (resolved by display name only
+# when a group actually requires approval).
 #------------------------------------------------------------------------------
 
 data "azuread_group" "function" {

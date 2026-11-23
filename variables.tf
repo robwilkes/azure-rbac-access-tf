@@ -70,6 +70,26 @@ variable "custom_roles" {
 }
 
 #------------------------------------------------------------------------------
+# Entra ID role lookup pins
+#------------------------------------------------------------------------------
+
+variable "entra_custom_role_ids" {
+  type        = map(string)
+  default     = {}
+  description = "Entra ID custom role display name => role definition ID. Needed for custom roles created via the unified role management API, which never appear in the tenant's directory role list and so can't be resolved by name (find the ID at GET /roleManagement/directory/roleDefinitions or in the portal URL of the role). On a collision with a built-in role or activated instance of the same display name, this wins."
+
+  validation {
+    condition     = alltrue([for id in values(var.entra_custom_role_ids) : can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", id))])
+    error_message = "entra_custom_role_ids values must be GUIDs, e.g. \"445d8482-3dc2-47fd-9ca2-85f51e73f309\"."
+  }
+
+  validation {
+    condition     = alltrue([for name in keys(var.entra_custom_role_ids) : trimspace(name) != ""])
+    error_message = "entra_custom_role_ids keys are role display names and must not be blank."
+  }
+}
+
+#------------------------------------------------------------------------------
 # Scope bundles
 #------------------------------------------------------------------------------
 
